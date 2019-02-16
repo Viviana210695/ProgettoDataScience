@@ -1,0 +1,955 @@
+---
+title: "Un tour nella storia dei Giochi Olimpici"
+author: "Viviana Longo"
+date: "25/02/2019"
+output: 
+  html_document: 
+    fig_caption: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(ggmap)
+library(plotly)
+library(knitr)
+library(broom)
+library(modelr)
+library(tidyverse)
+library(maps)
+library(gridExtra)
+library(corrplot)
+
+```
+##Introduzione
+
+I giochi olimpici dell'era moderna sono parte della nostra storia da ormai più di 120 anni. 
+Attraverso questa analisi andrò ad approfondire come si sono evoluti nel tempo.
+In particolare vedremo:
+
+*  Evoluzione del numero dei partecipanti negli anni. 
+*  Impatto di importanti eventi storici sui giochi olimpici.
+*  Quali sono i fattori significativi per la vincita di una medaglia.
+*  Quali sport caratterizzano le nazioni vincitrici di molteplici giochi olimpici.
+*  Impatto delle caratteristiche fisiche sulle vittorie.
+*  Se la nazione che gioca in casa è favorita rispetto alla nazione ospite.
+*  Curiosità emerse dall'analisi del dataset.
+
+##Datasets
+Per effettuare l'analisi ho utilizzato principalmente due datasets. Il primo `atleti_eventi`,di cui riporto le prime righe, è caratterizzato da 271116 osservazioni e 14 variabili che descrivono l'atleta nelle sue caratteristiche fisiche,il comitato olimpico di appartenenza, l'evento olimpico cui ha partecipato, lo sport praticato e la madeglia eventualmente vinta.
+
+```{r}
+atleti_eventi<-read_csv("athlete_events.csv",col_types =cols (
+  ID = col_integer(),
+  Name = col_character(),
+  Sex = col_character(),
+  Age = col_integer(),
+  Height = col_integer(),
+  Weight = col_double(),
+  Team = col_character(),
+  NOC = col_character(),
+  Games = col_character(),
+  Year = col_integer(),
+  Season = col_character(),
+  City = col_character(),
+  Sport = col_character(),
+  Event = col_character(),
+  Medal = col_character()
+))
+#str(atleti_eventi)
+atleti_eventi<-select(atleti_eventi,-Games) #rimuovo una variabile ridondante del dataset
+atleti_eventi$Medal <- ifelse(is.na(atleti_eventi$Medal),'Nessuna', atleti_eventi$Medal) #trasformo gli NA della variabile Medal in una stringa che indica nessunam medaglia vinta (e non un dato mancante)
+kable(head(atleti_eventi))
+```
+
+Il secondo `noc_regions` costituito da 3 variabili e 230 osservazioni. In particolare è costituito da 230 NOC (codici dei comitati olimpici nazionali),dalle nazioni ad essi collegati ed eventuali note.Lo useremo per rilevare lo Stato di appartenenza dell'atleta.
+
+```{r}
+noc_regions<-read_csv("noc_regions.csv",col_types=cols(
+  NOC = col_character(),
+  region = col_character(),
+  notes = col_character()
+))
+#str(noc_regions)
+#modifico il nome della nazione per facilitare la costruzione di una successiva mappa del mondo
+noc_regions$region[noc_regions$region=="Virgin Islands, British"]= "Virgin Island"
+noc_regions$region[noc_regions$region=="Virgin Islands, US"]= "Virgin Island"
+
+kable(head(noc_regions))
+```
+
+Infine durante l'analisi ci serviremo di due dataset ausiliari per alcune analisi grafiche. Uno descrive il PIL per ogni nazione e l'altro associa ad ogni nazione il rispettivo continente di appartenenza e la capitale.
+
+Tutti i dataset utilizzati sono disponibili su [Kaggle](https://www.kaggle.com).
+
+N.B Quando parlerò di Olimpiadi farò riferimento esclusivamente ai Giochi olimpici estivi.
+
+##Analisi  effettuate
+
+###Andamento temporale della partecipazione ai giochi
+
+I giochi olimpici si suddividono in estivi ed invernali. Quelli estivi sono più comunemente chiamate Olimpiadi è sono nate nel 1896 e si sono tenute ad Atene, mentre quelli invernali sono nati nel 1924 e si sono tenuti a Chamonix. A partire dal 1994 si disputano a due anni di distacco da quelle estive. Nel 1906 vennero introdotti i giochi olimpici intermedi (edizione unica) per festeggiare il decimo anniversario del ripristino dei giochi olimpici.I Giochi intermedi non vengono assolutamente considerati come edizione ufficiale dei Giochi olimpici e la loro numerazione non è compresa in quella delle edizioni dei Giochi olimpici. Ciononostante, il successo di questa edizione si rivelò molto importante per il movimento olimpico, dopo i parziali insuccessi della II e della III Olimpiade.
+
+```{r}
+#visualizzo la prima olimpiade estiva
+kable(atleti_eventi %>%
+  arrange(Year,Season) %>%
+select(Year,Season,City)%>%slice(1))
+
+#visualizzo la prima olimpiade estiva
+kable(atleti_eventi %>%
+  arrange(Year,Season) %>%
+select(Year,Season,City) %>% filter(Season=="Winter")%>%slice(1))
+
+#viasualizzo quando sono state separate le olimpiadi estive da quelle invernali
+kable(atleti_eventi%>%select(Year,Season)%>% arrange(Year)%>% group_by(Year)%>%summarize('Olimpic Games'=n_distinct(Season)))
+```
+
+Osserviamo l'andamento dei partecipanti nei vari anni 
+
+```{r fig.cap="Figura 1",fig.height=5.5,fig.width=10}
+# conto il numero degli atleti che negli anni ha partecipato ai giochi separando quelli invernali da quelli estivi
+atleti_stagione<-atleti_eventi %>%
+  select(ID,Name,Year,Sex,Season) %>%
+  group_by(Year,Sex,Season) %>%
+  summarize(count=n_distinct(ID))
+
+#visualizzo il precedente risultato
+theme_update(plot.title = element_text(hjust = 0.5))
+g<-ggplot(atleti_stagione, aes(color=Sex))+geom_point(aes(x=Year,y=count))+
+  facet_grid(Season~.)+geom_line(aes(Year,count),linetype=2)+
+  scale_x_discrete(limits=seq(1896,2016,by=10))+
+  ggtitle(label="Numerosità atleti negli anni")+
+  ylab("N°Atleti")+xlab("Anni")+
+ theme(axis.text.x=element_text(angle = 70,hjust = 1),legend.box.background = element_rect(),axis.title.x.bottom =element_text(lineheight = 12),panel.background = element_rect(fill="whitesmoke"),legend.position = "bottom")
+
+
+#numero degli sport presenti per le due olimpiadi al giorno d'oggi 
+t1<-atleti_eventi%>%select(Year,Season,Sport)%>%group_by(Year,Season)%>%summarise(Sport=n_distinct(Sport))
+
+p1<-ggplot(t1,aes(x=as.factor(Year),y=Sport,color=Season,fill=Season))+geom_bar(stat = "identity")+theme_light()+scale_color_manual(values=c("gold4","deepskyblue3"))+scale_fill_manual(values=c("lightgoldenrod1","lightskyblue"))+theme(panel.border = element_blank(),panel.background = element_rect(),plot.title = element_text(hjust=0.5),axis.text.x=element_text(angle = 70,hjust = 1),legend.position = "bottom")+xlab("Anni")+ggtitle("Variabilità categorie di sport negli anni")
+
+grid.arrange(g,p1,ncol=2)
+```
+
+
+
+Dalla Figura 1 è possibile osservare come il numero delle partecipanti donne è sempre stato inferiore al numero degli uomini.Le donne hanno iniziato a partecipare ai Giochi dal 1900. Il numero dei partecipanti è maggiore per le olimpiadi estive che al 2016 si aggira su oltre i 10000 atleti totali, rispetto ai partecipanti dei giochi invernali che non raggiungono i 3000 atleti totali; un fattore è il ridotto numero di categorie sportive presenti nella statione invernale, infatti dal barplot vediamo come si distribuisce il numero delle categorie di sport in gara negli anni.In generale, per entrambe le stagioni l'andamento della partecipazione è crescente.
+
+Guardiamo più da vicino il grafico superiore
+
+```{r,fig.cap="Figura 2"}
+#plot della parte superiore del grafico
+g1<-ggplot(atleti_stagione%>%filter(Season=="Summer"),aes(x= Year,y=count,color=Sex))+
+  geom_point()+
+  geom_line(linetype=2)+
+  scale_x_discrete(limits=seq(1896,2016,by=10))+
+  ggtitle(label="Olimpiadi Estive")+
+  xlab("Anni")+ylab("N°Atleti")+
+theme(axis.text.x=element_text(angle = 70,hjust = 1),legend.box.background = element_rect(),axis.title.x.bottom =element_text(lineheight = 12),panel.background = element_rect(fill="whitesmoke"))
+
+ggplotly(g1,tooltip = c("Year","count"))
+
+```
+
+Ciò che colpisce osservando il grafico è che ci sono significativi cali nella partecipazione alle Olimpiadi in determinate edizioni. Mi chiedo se questa è una casualità o se eventuali avvenimenti geopolitici si riflettono su tale manifestazione. Andiamo a vedere!
+
+Importanti cali nella partecipazione si hanno nel 1932,1956,1980.
+
+####Olimpiadi 1932 
+
+Alle Olimpiadi del 1932 il numero degli atleti è stato inferiore rispetto al trend crescente, perchè erano gli anni del crollo della borsa di New York,"Il venerdì nero“, che di riflesso colpì anche le economie europee. Gli stipendi traballavano e la gente era poco propensa ad esaltarsi per l’Olimpiade.Inoltre,vista la posizione di Los Angeles, in quegli anni non c’erano i mezzi odierni per poterla raggiungere con facilità e molti atleti dovettero rinunciare. Gli atleti russi invece dopo la rivoluzione del 1917 non parteciparono ai Giochi fino al 1952 dove si presentarono come Unione Sovietica.
+
+```{r fig.height=5,fig.width=10,warning=FALSE}
+
+# per ognuno dei 4 anni cerco la città in cui si sono tenuti i giochi olimpici,il numero totale di partecipanti,il totale delle nazioni che hanno partecipato,le prime cinque ocn più partecipanti in valore assoluto e percentuale.Infine visualizzo la partecipazione colorando la mappa del mondo.
+
+byYear<-atleti_eventi%>%filter(Year %in% c("1932","1956","1980","2016"))%>%group_by(Year)%>%arrange(Year)%>%nest()
+
+
+città<-function(df) {
+  df%>% filter(Season=="Summer")%>%summarize(Città=first(City))
+}
+
+partecipanti<-function(df) {
+  tbl_partecipanti<-df%>% filter(Season=="Summer")%>% left_join(noc_regions,by="NOC")%>%
+    group_by(region)%>%summarize(n=n_distinct(ID)) %>% select(region,n) %>% arrange(-n)
+   sum(tbl_partecipanti$n)
+  
+}
+
+nazioni<-function(df) {
+  tbl_partecipanti<-df%>% filter(Season=="Summer" )%>% left_join(noc_regions,by="NOC")%>%
+    group_by(region)%>%summarize(n=n_distinct(ID)) %>% select(region,n) %>% arrange(-n)  
+  nrow(tbl_partecipanti)}
+
+elenco_nazioni<-function(df) {
+  tbl_partecipanti<-df%>% filter(Season=="Summer" )%>% left_join(noc_regions,by="NOC")%>%group_by(region)%>%summarize(n=n_distinct(ID)) %>% select(region,n) %>% arrange(-n)%>%mutate("%"=n/sum(n)*100)  
+ tbl_partecipanti$"%"<-round(tbl_partecipanti$"%",2)
+  names(tbl_partecipanti)<-c("nazioni","n° atleti","%")
+  
+  tbl_partecipanti[1:5,]
+  
+  }
+
+
+mappa<-function(df){
+  #numero atleti per comitato olimpico
+  NOC_n_atleti<-df%>%filter(Season=="Summer")%>%
+    group_by(NOC)%>%summarize(n=n_distinct(ID))
+  
+  #numero atleti per nazione.Una nazione può avere più di un comitato olimpico
+  region_partecipanti<-NOC_n_atleti%>%left_join(noc_regions,by="NOC")%>%group_by(region)%>%select(region,n)
+  
+  #creo la mappa
+  WorldData <- map_data('world')
+  WorldData %>% filter(region != "Antarctica") -> WorldData #rimuovo Antartide
+  WorldData <- fortify(WorldData) #trasforma la mappa in un data frame che può essere facilmente plottato
+  p <- ggplot()
+  p <- p + geom_map(data=WorldData, map=WorldData,
+                    aes(x=long, y=lat, group=group, map_id=region),
+                    fill="white", colour="#7f7f7f", size=0.5) #aggiungo la mappa base
+  
+  p <- p + geom_map(data=region_partecipanti, map=WorldData,
+                    aes(fill=n, map_id=region),
+                    colour="#7f7f7f", size=0.5) #mappa i dati sui partecipanti per nazione
+  
+  p <- p + coord_map("rectangular", lat0=0, xlim=c(-180,180), ylim=c(-90, 90)) #imposto il tipo di mappa da disegnare
+  p <- p + scale_fill_continuous(low="thistle2", high="darkred", 
+                                 guide="colorbar") #imposto la colorazione delle regioni della mappa
+  p <- p + scale_y_continuous(breaks=c()) #definisco la scala degli assi 
+  p <- p + scale_x_continuous(breaks=c())
+  
+  p <- p + theme_bw() #imposto il tema 
+  p <- p + theme(panel.border = element_blank())
+  p
+}
+
+
+byYear <- byYear%>% 
+  mutate(Città=purrr::map(.x=data,.f=città),Partecipanti=purrr::map(.x=data,.f=partecipanti),
+         Nazioni=purrr::map(.x=data,.f=nazioni), elenco_nazioni=purrr::map(.x=data,.f=elenco_nazioni),mappa=purrr::map(.x=data,.f=mappa))
+
+
+kable(cbind(byYear$Città[[1]],byYear$Partecipanti[[1]],byYear$Nazioni[[1]]),col.names = c("Città","Partecipanti","Nazioni"))
+
+kable(byYear$elenco_nazioni[[1]])
+
+
+
+#imposto le coordinate geografiche della sede olimpica
+Longitude=-118.14 
+Latitude=34.3
+
+
+byYear$mappa[[1]] <-byYear$mappa[[1]] + geom_point(aes(x = Longitude, y = Latitude), colour = "black", alpha=0.25, size = 0.9)+ labs(fill="N°atleti", title="Olimpiadi 1932",x="",y="")+ #definisco le etichette
+  geom_label_repel(
+    aes( x = Longitude, y = Latitude,label = "Los Angeles"),
+    family = 'Times', 
+    size = 3, 
+    box.padding = 0.2, point.padding = 0.3,
+    segment.color = 'grey50') 
+byYear$mappa[[1]]
+```
+
+####Olimpiadi 1956
+
+Ancora una volta il momento storico sembrò poco congeniale per confermare gli entusiasmi degli sportivi, a causa delle tensioni belliche attorno al canale di Suez e dell’occupazione dell’Ungheria da parte dell’esercito sovietico.
+
+```{r fig.height=5,fig.width=10,warning=FALSE}
+
+kable(cbind(byYear$Città[[2]],byYear$Partecipanti[[2]],byYear$Nazioni[[2]]),col.names = c("Città","Partecipanti","Nazioni"))
+
+kable(byYear$elenco_nazioni[[2]])
+
+
+Longitude=144.57
+Latitude=-37.48
+
+byYear$mappa[[2]] <-byYear$mappa[[2]] + geom_point(aes(x = Longitude, y = Latitude), colour = "black", alpha=0.25, size = 0.9)+labs(fill="N°atleti", title="Olimpiadi 1956",x="",y="")+
+  geom_label_repel(
+    aes( x = Longitude, y = Latitude,label = "Melbourne"),
+    family = 'Times', 
+    size = 3, 
+    box.padding = 0.2, point.padding = 0.3,
+    segment.color = 'grey50') 
+byYear$mappa[[2]]
+```
+
+####Olimpiadi 1980: Olimpiadi del boicottaggio
+
+Nei gennaio del 1980 l’Unione Sovietica inviò le proprie truppe in Afghanistan per sostenere un governo filo-sovietico instauratosi pochi mesi prima con un colpo di Stato. Negli Stati Uniti intanto nell’autunno dello stesso anno si sarebbero svolte le elezioni presidenziali. Il presidente democratico Jimmy Carter, anche per riguadagnarsi un po’ di popolarità, iniziò a promuovere un boicottaggio delle Olimpiadi di Mosca e in poco tempo lanciò il suo messaggio: se l’URSS non avesse ritirato le sue truppe dall’Afghanistan entro giugno gli Stati Uniti non avrebbero partecipato alle imminenti Olimpiadi moscovite. L’Unione Sovietica non pensò neanche lontanamente di ritirare i suoi carri armati dall’Afghanistan e così gli USA mantennero la loro promessa e non si presentarono ai Giochi.
+
+```{r fig.height=5,fig.width=10,warning=FALSE}
+kable(cbind(byYear$Città[[3]],byYear$Partecipanti[[3]],byYear$Nazioni[[3]]),col.names = c("Città","Partecipanti","Nazioni"))
+
+kable(byYear$elenco_nazioni[[3]])
+
+
+Longitude=37.36
+Latitude=55.45
+
+byYear$mappa[[3]] <-byYear$mappa[[3]] + geom_point(aes(x = Longitude, y = Latitude), colour = "black", alpha=0.25, size = 0.9)+labs(fill="N°atleti", title="Olimpiadi 1980",x="",y="")+
+  geom_label_repel(
+    aes( x = Longitude, y = Latitude,label = "Mosca"),
+    family = 'Times', 
+    size = 3, 
+    box.padding = 0.2, point.padding = 0.3,
+    segment.color = 'grey50') 
+byYear$mappa[[3]]
+```
+
+####Olimpiadi 2016
+
+Alle Olimpiadi del 2016, in assenza di problemi geopolitici importanti, si osserva una partecipazione più omogenea dell'intero mondo.
+
+```{r fig.height=5,fig.width=10,warning=FALSE}
+
+kable(cbind(byYear$Città[[4]],byYear$Partecipanti[[4]],byYear$Nazioni[[4]]),col.names = c("Città","Partecipanti","Nazioni"))
+
+kable(byYear$elenco_nazioni[[4]])
+
+Longitude=-43.12
+Latitude=-22.54
+
+byYear$mappa[[4]] <-byYear$mappa[[4]] + geom_point(aes(x = Longitude, y = Latitude), colour = "black", alpha=0.25, size = 0.9)+labs(fill="N°atleti", title="Olimpiadi 2016",x="",y="")+
+  geom_label_repel(
+    aes( x = Longitude, y = Latitude,label = "Rio de Janeiro"),
+    family = 'Times', 
+    size = 3, 
+    box.padding = 0.2, point.padding = 0.3,
+    segment.color = 'grey50') 
+byYear$mappa[[4]]
+
+```
+ 
+
+Da un confronto con la situazione attuale è immmediato affermare che gli eventi politici hanno influenzato una manifestazione di importanza mondiale. Per quanto riguarda l' importanza della posizione della città in cui si sono tenuti i giochi, possiamo andare a confrontare la partecipazione per città ospitante nei vari anni.In questo grafico sono riportate solo le città che hanno ospitato i giochi più di una volta.
+
+```{r fig.cap="Figura 3"}
+#seleziono le città in cui si sono tenuti i Giochi più di una volta e visualizzo le variazioni nel numero di partecipanti
+
+città<-atleti_eventi%>%select(Year,City)%>%group_by(Year)%>%arrange(Year)%>%distinct()%>%group_by(City)%>%summarize(eventi=n())%>%filter(eventi>=2)
+città_atleti<-città%>%left_join(atleti_eventi,by="City")%>%select(ID,City,Year,Season)%>%group_by(Year,City)%>%summarize(atleti=n_distinct(ID))
+g2<-ggplot(città_atleti,aes(x=Year,y=atleti,colour=City))+geom_point()+geom_line(linetype="dotdash")+ggtitle("Partecipazione per sede olimpica")+xlab("Anni")+theme_minimal()
+ggplotly(g2)
+
+```
+
+Osserviamo che vi è sempre un incremento della partecipazione al crescere degli anni tranne in un caso.
+Il quadrato delimitato sull' asse x dall'anno 1950 (che possiamo considerare anno limite per il fattore mezzi di trasporto inefficienti) e sull' asse y da atleti 5000  è la zona in cui si posizionano tutte le prime edizioni dei Giochi.Le edizioni successiove se avvenute prima del 1950 sono rimaste nel quadrato, se dopo, si sono posizionate,gran parte, in alto a destra dell'area del grafico. Eccezioni sono San Moritz, Innsbruck e Lake Placid dove si sono svolte olimpiadi invernali e abbiamo visto che il numero dei partecipanti non supera i 3000; in ogni caso l'andamento è crescente. Infine,Stoccolma pur essendo una città europea, dunque centrale, ha avuto un calo dei partepanti, non dovuto al fattore distanza e al fattore assenza di mezzi di trasporto efficienti, bensì il 1956 era uno di quegli anni con problemi politici. 
+Non possiamo affermare con certezza che la posizione in cui si tiene l’evento olimpico non sia influente, in quanto poche sono le città in cui i giochi si sono tenuti più di una volta.In generale l'andamento è sempre crescente, dovuto sicuramente al miglioramento dei mezzi di trasporto che fa si che la posizione non sia più un problema rilevante.
+
+###I comitati olimpici con più atleti vincono più medaglie? 
+
+La domanda sembra scontata e vien semplice pensare che quanti più atleti si portano in gara tanto maggiori sono le possibilità di vincere una medaglia.Ipotizzando così una relazione di tipo proporzionale,lineare.Ma i dati ci diranno molto di più! 
+Osserviamo come si sono distribuite le vittorie nel corso degli anni al variare della numerosità dei comitati olimpici.Man mano che ci si avvicina al 2016 la distribuzione tende ad essere di tipo esponenziale.
+
+
+```{r include=FALSE}
+#introduco nel dataset una nuova variabile che traduce la variabile di tipo string Medal in una variabile numerica 
+atleti_eventi$medaglie<-ifelse(atleti_eventi$Medal=="Nessuna",0,1)
+as.integer(atleti_eventi$medaglie)
+```
+
+
+```{r warning=FALSE, fig.cap="Figura 4"}
+# seleziono Year,Noc,Id e riassumo il numero di atleti partecipanti
+tb1<-atleti_eventi%>%select(Year,NOC,ID)%>%group_by(Year,NOC)%>%arrange(Year,NOC)%>%summarize(atleti=n_distinct(ID))
+
+#tb1%>%count(Year,NOC)%>%filter(n>1) mi assicuro che siano campi chiave
+
+#selezioni Year,Noc,Medaglie è riassumo il numero di medaglie vinte in ogni anno da ciascun NOC
+tb2<-atleti_eventi%>%select(Year,NOC,medaglie)%>%group_by(Year,NOC)%>%summarize(medals=sum(medaglie))
+
+#tb2%>%count(Year,NOC)%>%filter(n>1) mi assicuro che siano campi chiave
+
+tb3<-tb1%>%inner_join(tb2,by=c("Year","NOC")) #unisco le due tabelle
+
+#plot della tb3
+g4<-ggplot(tb3,aes(x=atleti,y=medals))+geom_point(aes(frame=Year),colour="blue",show.legend = FALSE)+ggtitle("Dipendenza tra numerosità NOC e medaglie")+theme_minimal()+ylab("Medaglie")+xlab("Atleti")
+ggplotly(g4)%>%animation_opts(1000)%>%
+  animation_slider(
+    currentvalue = list(prefix = "YEAR ", font = list(color="blue"))
+  )
+
+
+```
+
+Possiamo dunque pensare ad una relazione di dipendenza tra il numero di medaglie vinte e il numero di atleti.
+Non possiamo applicare una regressione lineare perchè c'è una **relazione esponenziale**; per questo vado a testare la significatività della dipendenza attraverso un modello di **regressione di Poisson**.
+
+Non posso considerare i dati come se fossero di tipo cross-section per stimare il modello, perchè per questo tipo di dati c'è una forte dipendenza dal tempo.In quanto, per esempio,nei giochi olimpici la tecnologia ha portato dei miglioramenti nelle performance degli atleti e quindi incrementato le vittorie
+Per questo prendiamo in considerazione gli anni 1992,1996,2000 e 2016 in cui c'è una partecipazione pressochè costante.
+E andiamo a studiare una relazione di questo tipo:
+
+$Medaglie=exp(\beta_0+\beta_1*atleti)$
+
+Modello per il 1992
+
+```{r}
+
+#per ogni anno stimiamo un modello di regressione
+by_year<-tb3%>%filter(Year %in% c("1992","1996","2000","2016"))%>%group_by(Year)%>%nest()
+
+
+modello<-function(df) {
+  glm(medals~atleti,family = poisson(link=sqrt),data=df)
+}
+
+by_year <- by_year%>% 
+  mutate(model=purrr::map(.x=data,.f=modello))
+
+summary(by_year$model[[1]]) 
+
+```
+
+Modello per il 1996
+
+```{r}
+summary(by_year$model[[2]])
+
+```
+
+Modello per il 2000
+
+```{r}
+summary(by_year$model[[3]])
+
+```
+
+Modello per il 2016
+
+```{r}
+summary(by_year$model[[4]])
+```
+
+Tutti i modelli risultano essere significativi con probabilità inferiore allo 0.001 e con una devianza residua non troppo elevata rispetto ai gradi di libertà del modello.Seppur tutta la variabilità non è spiegata solo dal modello.
+
+#####Interpretazione dei coefficienti
+
+* *Intercetta*: non ha significato in quanto in assenza di atleti non è possibile vincere medaglie,lo si può interpretare come un valor medio
+
+*  $\beta_1$ : ci dice che un incremento di un atleta comporta un incremento del numero di medaglie di $exp(\beta_1)$
+
+        
+```{r}
+# creo vettori di intercette e beta stimati per ciascun anno
+Intercetta<-vector(length = 4,mode="numeric")
+Beta1<-vector(length = 4,mode="numeric")
+for(i in 1:4){
+  round(by_year$model[[i]]$coefficients[1],4)->Intercetta[i]
+  round(by_year$model[[i]]$coefficients[2],4)->Beta1[i]
+ }
+
+#creo tabella 
+tb<-as.data.frame(cbind(Intercetta,Beta1))
+
+#della precedente tabella tb3 faccio un grafico che mostra il modello glm stimato per alcuni anni
+tb3_ridotta<-tb3%>%filter(Year %in% c("1992","1996","2000","2016"))
+g5<-tb3_ridotta%>%
+ggplot(aes(x=atleti,y=medals),scale="column")+geom_point()+geom_smooth(method ="glm",method.args = list(family =poisson(link="sqrt")),data=tb3_ridotta)+facet_wrap(~Year,ncol = 2)+ylab("medaglie")+theme(panel.background = element_rect(fill="whitesmoke"))
+
+
+
+tb<-tb%>%mutate(medaglieX10atleti=exp(Intercetta+Beta1*10))
+tb<-tb%>%mutate(medaglieX20atleti=exp(Intercetta+Beta1*20))
+tb<-tb%>%mutate(medaglieX50atleti=exp(Intercetta+Beta1*50))
+tb<-tb%>%mutate(medaglieX100atleti=exp(Intercetta+Beta1*100))
+kable(tb)
+```
+
+
+```{r fig.cap="Figura 5"}
+g5
+```
+
+
+Si osservi che passando da 10 a 20 atleti, il numero di medaglie non varia, ma passando da 10 a 50 aumenta di 4, mentre da 10 a 100 incrementa di circa 20.
+Quindi concludiamo che è vero che il numero di atleti aumenta la possibilità di portare medaglie a casa ma solo da un certo numero in poi.
+
+Abbiamo detto che la relazione sopra analizzata é caratterizzante un preciso anno e ciò che caratterizza la ricchezza di una nazione in un anno e quindi,quante risorse può investire nello sport è il prodotto interno lordo (PIL).Vediamo graficamente se questo può essere un ulteriore fattore di variabilità per le medaglie vinte.
+
+```{r fig.width=8,warning=FALSE,fig.cap="Figura 6", echo=FALSE}
+#leggo il data frame sul Gdp per nazione
+w_gdp<-read_delim("w_gdp.csv",delim=";",locale=locale(decimal_mark = ","),col_types=cols(
+  .default = col_double(),
+  `Country Name` = col_character(),
+  `Country Code` = col_character()
+)) %>% gather(`1990`,`1991`,`1992`,`1993`,`1994`,`1995`,`1996`,`1997`,`1998`,`1999`,`2000`,`2001`,`2002`,`2003`,`2004`,`2005`,`2006`,`2007`,`2008`,`2009`,`2010`,`2011`,`2012`,`2013`,`2014`,`2015`,`2016`,key="Year",value="Gdp")
+
+#modifico i nomi di alcune nazioni per poter fare inner join 
+w_gdp$`Country Name`[w_gdp$`Country Name`=="British Virgin Islands"]<-"Virgin Islands"
+w_gdp$`Country Name`[w_gdp$`Country Name`=="Virgin Islands (U.S.)"]<-"Virgin Islands"
+w_gdp$`Country Name`[w_gdp$`Country Name`=="United Kingdom"]<-"UK"
+w_gdp$`Country Name`[w_gdp$`Country Name`=="United States"]<-"USA"
+
+#adatto le colonne della nuova tabella per poter fare join
+w_gdp<-w_gdp%>%arrange(Year)%>%unite(col="Year_region",c("Country Name","Year"))
+tb3<-tb3%>%left_join(noc_regions,by="NOC")%>%select(Year,NOC,atleti,medals,region)%>%unite(col="Year_region",c("region","Year"),sep="_")
+
+
+#join tra le tabelle
+tb4<-tb3%>%inner_join(w_gdp,by=("Year_region"))%>%select(Year_region,NOC,atleti,medals,Gdp)%>%separate(col = "Year_region",into=c("region","Year"),sep="_")
+
+#rimuovo le righe per cui non abbiamo informazioni sul pil e raggruppo per anno
+tb4<-tb4%>%filter(!is.na(Gdp))%>%group_by(Year)
+
+#leggo il dataset che ssocia le nazioni ai continenti
+countries_continents<-read_csv("countries and continents.csv",col_types = cols(
+  .default = col_character(),
+  M49 = col_integer(),
+  GAUL = col_number(),
+  `ISO4217-currency_minor_unit` = col_integer(),
+  `ISO4217-currency_numeric_code` = col_integer(),
+  `Geoname ID` = col_integer()
+))
+
+countries_continents$Continent[is.na(countries_continents$Continent)] <- "NA" #gli NA non sono unkown ma indicano Nord America
+countries_continents$name[countries_continents$name=="US"]<-"USA"
+countries_continents<-countries_continents%>%select(name,Continent)
+
+
+countries_continents$Continent<-factor(countries_continents$Continent)
+levels(countries_continents$Continent)<-c("Africa","Antartide","Asia","Europa","Nord America","Oceania","Sud America")
+tb4<-tb4%>%left_join(countries_continents,by=c("region"="name"))
+#tb4%>%filter(is.na(Continent))
+tb4$Continent[tb4$region=="Bosnia and Herzegovina"]<-"Europa"
+tb4$Continent[tb4$region=="Sao Tome and Principe"]<-"Africa"
+tb4$Continent[tb4$region=="Kosovo"]<-"Europa"
+
+g5<-ggplot(tb4,aes(x=atleti,y=medals,group=region))+geom_jitter(aes(frame=Year,size=Gdp,colour=Continent),alpha=0.8,show.legend =FALSE)+ggtitle("Relazione tra partecipazione,medaglie e Gdp")+theme_minimal()+scale_size(range = c(2,12))+scale_colour_brewer(palette = "Set2")+ylab("Medaglie")+xlab("N° atleti")
+ggplotly(g5)%>%add_annotations(text="Continenti",xref="paper", yref="paper",
+                  x=1.02, xanchor="left",
+                  y=0.8, yanchor="bottom",    
+                  legendtitle=TRUE, showarrow=FALSE ) %>%
+  layout(legend=list(y=0.8, yanchor="top"))%>%animation_opts(2000)%>%
+  animation_slider(
+    currentvalue = list(prefix = "YEAR ", font = list(color="blue"))
+  )
+```
+
+
+
+Si osserva, più visibilmente per gli anni delle Olimpiadi, un andamento lineare con le aspettative ossia: gli stati con PIL più elevato vincono di più, collocandosi nella parte in alto a destra dell'area del grafico. Allo stesso tempo si osserva un progressivo avvicinamento degli stati con PIL nettamente più basso verso quelli più ricchi e in alcuni anni addirittura un superamento. Questo è indice della presenza di ulteriori fattori di variabilità che con i dati che abbiamo non riusciamo a spiegare.
+Potremmo pensare al talento dell'atleta,alle ore di allenamento, al tipo di allenamento e magari alle condizioni climatiche della città in cui si tengono i giochi che favoriscono un tipo d'atleta piuttosto che un altro. 
+
+###Chi ha vinto più medaglie d'oro dal 1990 al 2016 alle Olimpiadi estive?
+
+```{r fig.width=8,fig.cap="Figura 7"}
+
+#creo una tabella in cui per ogni NOC si identificano le medaglie totali vinte per tipo:Oro,Argento;Bronzo
+medagliere<-atleti_eventi%>%filter(Season=="Summer",Year>1989)%>%select(NOC,Year,Medal,medaglie)
+medagliere<-medagliere%>%mutate(Oro=ifelse(Medal=="Gold",1,0),Argento=ifelse(Medal=="Silver",1,0),Bronzo=ifelse(Medal=="Bronze",1,0))%>%select(NOC,Year,Oro,Argento,Bronzo)
+
+#unisco i noc alle nazioni di appartenenza
+medagliere<-medagliere%>%left_join(noc_regions,by="NOC")%>%select(-notes)
+medagliere<-medagliere%>%group_by(Year,region)%>%summarize(Oro=sum(Oro),Argento=sum(Argento),Bronzo=sum(Bronzo),Totali=Oro+Argento+Bronzo)
+
+# nazioni sul podio per medaglie totali
+medagliere<-medagliere%>%group_by(Year)%>%arrange(Year,-Totali)%>%slice(1:3) #selezioniamo il podio di ogni anno
+
+medagliere$Year<-parse_character(medagliere$Year)
+
+g6<-medagliere%>%ggplot(aes(x=Year,group=-Totali))+
+  geom_bar(aes(y=Totali,fill=region),stat="identity",position = "dodge")+scale_fill_brewer(palette = "Accent")+theme_bw()+theme(panel.background = element_blank(),panel.border = element_blank())+xlab("Anni")+ylab("Medaglie Totali")
+
+
+# nazioni sul podio per medaglie d'oro
+medagliere2<-medagliere%>%gather(`Oro`,`Argento`,`Bronzo`,key=tipo,value=numero)%>%filter(tipo=="Oro")
+
+
+g7<-medagliere2%>%ggplot(aes(x=Year,group=-numero))+
+  geom_bar(aes(y=numero,fill=region),stat="identity",position = "dodge")+scale_fill_brewer(palette = "Accent")+theme_bw()+theme(panel.background = element_blank(),panel.border = element_blank())+xlab("Anni")+ylab("Medaglie d'oro")+ylim(0,300)
+
+
+cowplot::plot_grid(g6, g7,ncol = 1,labels = "Il podio nel tempo...")
+#creo tabella per grafico di confronto sul numero di atleti portati da ciascuno nazione in quegli anni
+partecipanti_anno<-atleti_eventi%>%filter(Year %in% c(1992,1996,2000,2004,2008,2012,2016))%>%left_join(noc_regions,by="NOC")%>%group_by(Year,region)%>%summarize(atleti=n_distinct(ID))
+
+
+```
+
+```{r fig.cap="Figura 8"}
+
+#creo un grafico che per ogni nazione riporta i partecipanti negli anni 
+g_partecipanti_anno<-ggplot(partecipanti_anno,aes(x=Year,y=atleti,colour=region))+geom_point(show.legend = FALSE)+geom_line(linetype="dotdash",show.legend = FALSE)+scale_x_discrete(limits=seq(1896,2016,by=10))+theme_minimal()+ggtitle("Partecipanti per nazione negli anni")+xlab("Anni")
+ggplotly(g_partecipanti_anno)%>%hide_legend()
+```
+
+Osserviamo dalla Figura 7 che le nazioni che sono posizionate sul podio sono quelle che negli anni hanno sempre avuto una presenza notevole in termini di partecipanti (Figura 8 guardare le linee più in alto),confermando l'importanza di tale fattore.
+Gli Stati Uniti nelle ultime sette Olimpiadi si sono classificate al primo posto per medaglie totali e in termini di medaglie d'oro sono molto distanti dal secondo e terzo classificato.
+Mentre i secondi e terzi classificati hanno pressocchè vinto lo stesso numero di medaglie.
+
+
+###Quali sport caratterizzano le nazioni che si sono classificate sul podio nell'intervallo di tempo 1990-2016?
+
+Osserviamo i seguenti grafici:
+
+```{r warning=FALSE, fig.height=10,fig.width=10,fig.cap="Figura 9"}
+
+# Per le 5 nazioni che si sono posizionate sul podio visto in precedenza, calcolo il numero di medaglie totali vinte in ogni sport,riordino per medaglie vinte in ordine decrescente e prendo i primi 5 sport con più medaglie
+tb5<-atleti_eventi%>%filter(Season=="Summer",Year>1989)%>% 
+  select(ID,Year,NOC,Sport,Medal,medaglie)%>%
+  left_join(noc_regions,by="NOC")%>%
+  group_by(Year,region,Sport)%>%
+  summarize(medaglie_vinte=sum(medaglie))%>%
+  filter(region %in% c("USA","Russia","Australia","China","Germany","UK"))%>%
+  select(Year,region,Sport,medaglie_vinte)%>%arrange(Year,region,-medaglie_vinte)%>%slice(1:5)
+tb5$region<-as.factor(tb5$region)
+#per ogni anno creiamo un grafico
+by_year2<-tb5%>%filter(Year %in% c("1992","2004","2012","2016"))%>%group_by(Year)%>%nest()
+
+#creo una funzione grafico che applicherò ad ogni tabella innestata
+grafico<-function(df) {
+  #per la creazione di questo grafico ho seguito la struttura disponibile su Rgraph Gallery
+  # Imposto un numero di "empty_bar" da aggiungere alla fine di ogni gruppo per lasciare spazio
+  empty_bar=2
+  # aggiungo due righe vuote dopo ogni gruppo definito dalla nazione, nel dataset di partenza
+  to_add = data.frame( matrix(NA, empty_bar*nlevels(df$region), ncol(df)) )
+  colnames(to_add) = colnames(df)
+  to_add$region=rep(levels(df$region), each=empty_bar)
+  df=rbind(df, to_add)
+  df=df %>% arrange(region) #ordino per regione
+  df$id=seq(1, nrow(df)) #aggiungo id ad ogni riga
+  
+  # Preparo le etichette del grafico
+  
+  label_data=df
+  number_of_bar=nrow(label_data)
+  # calcolo angolo delle etichette
+  angle= 90 - 360 * (label_data$id-0.5) /number_of_bar #si sottrae 0.5 perchè le etichette devono avere l' angolo del centro della barra non l'angolo dell' estremo destro o sinistro della barra 
+  
+  # calcolo allineamento delle etichette:destra o sinistra
+  # quando sono nella parte sinistra del grafico le etichette hanno un angolo minore di -90 gradi
+  label_data$hjust<-ifelse( angle < -90, 1, 0)
+  
+  # quando l' angolo è minore di -90  inverto l'etichetta di 180 gradi 
+  label_data$angle<-ifelse(angle < -90, angle+180, angle)
+ 
+  
+  # preparo il data frame per aggiungere le linee di base nere 
+  base_data<-df%>%
+    group_by(region) %>% 
+    summarize(start=min(id), end=max(id) - empty_bar) %>% 
+    rowwise() %>% #crea gruppi di variabili liste su cui fare operazioni come summarise ad mutate senza utilizzare [[]]
+    mutate(title=mean(c(start, end)))
+  
+  # prepara il data frame per l'aggiunta della scala di misura 
+  grid_data = base_data
+  grid_data$end = grid_data$end[ c( nrow(grid_data), 1:nrow(grid_data)-1)] + 1 #prende l' ultimo elemento di grid_data$end e lo mette come primo aggiungendo 1, prende il primo e lo mette come secondo aggiungendo 1 e cosi via 
+  grid_data$start = grid_data$start - 1
+  grid_data=grid_data[-1,] #toglie un gruppo per realizzare n-1 griglie
+  
+  
+  
+  # Realizziamo il grafico
+  p = ggplot(df, aes(x=as.factor(id), y=medaglie_vinte, fill=region)) + # fattorizzando id evitiamo rimuoviamo dello spazio vuoto prima della prima barra 
+    
+    geom_bar(aes(x=as.factor(id), y=medaglie_vinte, fill=region), stat="identity", alpha=0.5) +
+    
+    # Aggiungiamo la griglia (la scala) del grafico in modo che dopo le barre si sovrappongano a questa
+    geom_segment(data=grid_data, aes(x = end, y = 70, xend = start, yend = 70), colour = "grey", alpha=1, size=0.3 , inherit.aes = FALSE ) +
+    geom_segment(data=grid_data, aes(x = end, y = 50, xend = start, yend = 50), colour = "grey", alpha=1, size=0.3 , inherit.aes = FALSE ) +
+    geom_segment(data=grid_data, aes(x = end, y = 30, xend = start, yend = 30), colour = "grey", alpha=1, size=0.3 , inherit.aes = FALSE ) +
+    geom_segment(data=grid_data, aes(x = end, y = 10, xend = start, yend = 10), colour = "grey", alpha=1, size=0.3 , inherit.aes = FALSE ) +
+    
+    # Aggiungo il testo che mostra il valore di ciascuna delle linee della griglia del grafico 70/50/30/10 
+    annotate("text", x = rep(max(df$id),4), y = c(10, 30, 50, 70), label = c("10", "30", "50", "70") , color="grey", size=3 , angle=0, fontface="bold", hjust=1) +
+    
+    geom_bar(aes(x=as.factor(id), y=medaglie_vinte, fill=region), stat="identity", alpha=0.5) +
+    ylim(-100,120) +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+      axis.text = element_blank(),
+      axis.title = element_blank(),
+      panel.grid = element_blank(),
+      plot.margin = unit(rep(-1,4), "cm") 
+    ) +
+    coord_polar() + #rende il grafico circolare
+    #aggiungo le etichette con l' angolatura calcolata in precedenza
+    geom_text(data=label_data, aes(x=id, y=medaglie_vinte+10, label=Sport, hjust=hjust), color="black", fontface="bold",alpha=0.6, size=2.5, angle= label_data$angle, inherit.aes = FALSE )+
+    
+    # Aggiungiamo la linea di base nera e il testo che identifica il gruppo
+    geom_segment(data=base_data, aes(x = start, y = -5, xend = end, yend = -5), colour = "black", alpha=0.8, size=0.6 , inherit.aes = FALSE )  +
+    geom_text(data=base_data, aes(x = title, y = -18, label=region), colour = "black", alpha=0.8, size=2, fontface="bold", inherit.aes = FALSE)
+
+}
+#applico la funzione 
+by_year2 <- by_year2 %>%
+  mutate(grafici=purrr::map(.x=data,.f=grafico))
+
+#al centro di ogni grafico inserisco del testo che indica l' anno di riferimento
+by_year2$grafici[[1]]<-by_year2$grafici[[1]]+geom_text(aes(x = 0, y = -100, label="1992"), colour = "blue", alpha=0.8, size=5, inherit.aes = FALSE)
+by_year2$grafici[[2]]<-by_year2$grafici[[2]]+geom_text( aes(x = 0, y = -100, label="2004"), colour = "blue", alpha=0.8, size=5,  inherit.aes = FALSE)
+by_year2$grafici[[3]]<-by_year2$grafici[[3]]+geom_text( aes(x = 0, y = -100, label="2012"), colour = "blue", alpha=0.8, size=5,  inherit.aes = FALSE)
+by_year2$grafici[[4]]<-by_year2$grafici[[4]]+geom_text(aes(x = 0, y = -100, label="2016"), colour = "blue", alpha=0.8, size=5,  inherit.aes = FALSE)
+
+
+cowplot::plot_grid(by_year2$grafici[[1]], by_year2$grafici[[2]],by_year2$grafici[[3]],by_year2$grafici[[4]],ncol = 2)
+
+```
+
+Lo sport che caratterizza gli USA dal 1992 è il nuoto, seguito da atletica, basket e pallavolo; l' Australia dal 2004 condivide il nuoto ma si classifica seconda.
+Il Regno Unito si conferma al 2016 campione di voga e bicicletta.
+La Germania al 2016 è campione di football e hockey.
+
+Inoltre si può notare che gli USA si sono sempre distinti per nuoto,atletica e basket mentre nazioni come la Cina non focalizzano l'attenzione su un determinato sport, bensì ad ogni edizione salgono sul podio con sport differenti.Questo ci spiega come mai nel punto precedente poche volte abbiamo ritrovato sul podio la Cina e molte volte Stati Uniti e Australia.
+
+Nella tabella seguente si può visualizzare il podio relativo agli sport in cui si sono vinte più medaglie,evidenziando il tipo di medaglia vinta.
+
+```{r warning=F}
+#tabella più complessa con suddivisioni per medaglie
+tb6<-atleti_eventi%>%filter(Season=="Summer",Year>1989)%>% select(ID,Year,NOC,Sport,Medal,medaglie)%>%group_by(Year,NOC,Sport)%>%left_join(noc_regions,by="NOC")%>%
+  filter(region %in% c("USA","Russia","Australia","China","Germany","UK"),Year %in% c(1992,2004,2012,2016))%>%
+  mutate(Oro=ifelse(Medal=="Gold",1,0),Argento=ifelse(Medal=="Silver",1,0),Bronzo=ifelse(Medal=="Bronze",1,0))%>%group_by(Year,region,Sport)%>%summarize(med_Oro=sum(Oro),med_Arg=sum(Argento),med_Bronzo=sum(Bronzo),medaglie_tot=med_Oro+med_Arg+med_Bronzo)%>%arrange(Year,-medaglie_tot)%>%group_by(Year)%>%slice(1:3)
+
+kable(tb6,col.names = c("Anno","Nazione","Sport","Oro","Argento","Bronzo","Totale"))
+```
+
+### Peso e altezza degli altleti di nuoto,atletica e ginnastica negli anni.Sono fattori influenti nella variazione delle vittorie?
+
+Consideriamo atleti di età compresa tra i 18 e i 30 anni 
+
+```{r include=FALSE}
+tb7<-atleti_eventi%>%filter(Sport %in% c("Swimming","Athletics","Gymnastics"))%>%select(Year,ID,Name,Sport,Sex,Age,Height,Weight,medaglie)%>%distinct()
+
+#valutiamo range di età da considerare
+tb7%>%filter(Sport=="Swimming")%>%summarize(min_Age=min(Age,na.rm = T),max_Age=max(Age,na.rm=T),media=mean(Age,na.rm = T))
+
+tb7%>%filter(Sport=="Athletics")%>%summarize(min_Age=min(Age,na.rm = T),max_Age=max(Age,na.rm=T),media=mean(Age,na.rm = T))
+
+tb7%>%filter(Sport=="Gymnastics")%>%summarize(min_Age=min(Age,na.rm = T),max_Age=max(Age,na.rm=T),media=mean(Age,na.rm = T))
+
+by_sport<-tb7%>%group_by(Sport)%>%nest()
+
+distrib_peso<-function(df) {
+  df%>%filter(between(Age,18,30),Year>1948 )%>%ggplot(aes(x=as.factor(Year),y=Weight,colour=Sex))+geom_boxplot()+xlab("Anni")+ylab("Peso")+ggtitle("Distribuzione del peso")+theme(axis.text.x=element_text(angle = 70,hjust = 1),legend.box.background = element_rect(),axis.title.x.bottom =element_text(lineheight = 12),panel.border = element_blank(),panel.background = element_rect(fill="whitesmoke"))
+}
+
+distrib_altezza<-function(df) {
+  df%>%filter(between(Age,18,30),Year>1948 )%>%ggplot(aes(x=as.factor(Year),y=Height,colour=Sex))+geom_boxplot()+xlab("Anni")+ylab("Altezza")+ggtitle("Distribuzione dell'altezza")+theme(axis.text.x=element_text(angle = 70,hjust = 1),legend.box.background = element_rect(),axis.title.x.bottom =element_text(lineheight = 12),panel.border = element_blank(),panel.background = element_rect(fill="whitesmoke"))
+}
+
+by_sport <- by_sport %>%
+  mutate(grafici_peso=purrr::map(.x=data,.f=distrib_peso),grafici_altezza=purrr::map(.x=data,.f=distrib_altezza))
+
+```
+####Nuoto
+
+
+Per un nuotatore maschile il peso medio è di 80Kg e l'altezza è di 185cm
+Per un nuotatore femminile il peso medio è di 65Kg e l'altezza è di 175cm
+
+```{r warning=FALSE,fig.cap="Figura 10"}
+
+#Swimming
+
+grid.arrange(by_sport$grafici_peso[[2]],by_sport$grafici_altezza[[2]],nrow=2)
+swimtable<-tb7%>%filter(Sport=="Swimming",between(Age,18,30), Year>=1952)%>%select(ID,Sex,Weight,Height,Age,medaglie)%>%filter(!is.na(Height),!is.na(Weight))
+```
+
+Osserviamo che per l'intervallo temporale evidenziato in Figura 10, c'è bassa variabilità sia in senso orizzontale, quindi nel tempo che in senso verticale sia per il Peso che per l'Altezza, questo già ci fa capire che probabilmente non ci sarà alcun tipo di correlazione con il numero di medaglie vinte.
+Andiamo dunque a guardare il grafico delle correlazioni in Figura 11.
+
+
+```{r warning=FALSE,fig.cap="Figura 11"}
+cor<-cor(swimtable[,c(3:6)])
+res1 <- cor.mtest(swimtable[,c(3:6)], conf.level = .95)
+corrplot.mixed(cor,p.mat = res1$p, order = "hclust", insig = "pch",number.cex =1.2,upper = "ellipse")
+```
+
+Dal grafico delle correlazioni emerge che vi è una significativa correlazione positiva tra peso e altezza ma nessuna delle variabili `Weight`,`Height`,`Age`spiega la variabilità della variabile di conteggio `medaglie`(questo lo deduco osservando la bassa percentuale di correlazione con la variabile risposta). Infatti il modello di regressione lineare che ho stimato considerando l'effetto interazione tra peso e altezza spiega meno del 2% della variabilità (tramite R-quadro), pur essendo le variabili significative.
+
+```{r warning=FALSE}
+#creo una funzione per stimare un modello di regressione  che mapperò per ciascuno dei tre sport selezionati
+modello<-function(df) {
+ sport_table<-df%>%filter(between(Age,18,30), Year>=1952)%>%select(ID,Sex,Weight,Height,Age,medaglie)%>%filter(!is.na(Height),!is.na(Weight))
+      mod<-lm(medaglie~Sex+Weight:Height,data=sport_table)
+mod<-summary(mod)                                                                                                         
+ }
+by_sport <- by_sport %>%
+  mutate(modelli=purrr::map(.x=data,.f=modello))
+
+#seleziono il modello
+by_sport$modelli[[2]]
+
+```
+
+
+Questo è positivo perchè ci dice che ad oggi non sono queste tre caratteristiche a differenziare un atleta dall'altro.Non rappresentano alcun vantaggio proprio perchè gli atleti di questa categoria si presentano con la stessa età e conformazione fisica. 
+
+
+
+####Atletica
+
+Per i professionisti di atletica maschili e femminili il peso medio è rispettivamente di circa 70Kg e 60Kg con una notevole presenza di valori esterni dovuti alle caratteristiche richieste in determinate categorie dell' atletica. Dalla distribuzione dell' alteza osserviamo che alle donne corrispondono in media 170cm e agli uomini 180cm con pochi valori esterni.
+
+```{r warning=FALSE,fig.cap="Figura 12"}
+#Athletics
+
+grid.arrange(by_sport$grafici_peso[[1]],by_sport$grafici_altezza[[1]],nrow=2)
+
+
+athltable<-tb7%>%filter(Sport=="Athletics",between(Age,18,30), Year>=1952)%>%select(ID,Sex,Weight,Height,Age,medaglie)%>%filter(!is.na(Height),!is.na(Weight))
+```
+
+Per quanto rigurda le correlazioni e il modello rimangono valide le considerazioni fatte in precedenza.
+
+```{r warning=FALSE,fig.cap="Figura 12"}
+cor<-cor(athltable[,c(3:6)])
+res1 <- cor.mtest(athltable[,c(3:6)], conf.level = .95)
+corrplot.mixed(cor,p.mat = res1$p, order = "hclust", insig = "pch",number.cex =1.2,upper = "ellipse")
+```
+
+```{r warning=FALSE}
+#seleziono il modello
+by_sport$modelli[[1]]
+
+```
+
+
+ 
+####Ginnastica
+
+Le ginnaste pesano circa 50 Kg e sono alte circa 158Kg. I ginnasti pesano circa 65Kg e sono alti circa 168cm.
+
+```{r warning=FALSE,fig.cap="Figura 13"}
+#Gymnastics
+
+grid.arrange(by_sport$grafici_peso[[3]],by_sport$grafici_altezza[[3]],nrow=2)
+
+
+gymtable<-tb7%>%filter(Sport=="Gymnastics",between(Age,18,30), Year>=1952)%>%select(ID,Sex,Weight,Height,Age,medaglie)%>%filter(!is.na(Height),!is.na(Weight))
+```
+
+Ancora una volta questi valori tendono ad essere costanti su più anni e a non influire sulla variabilità delle medaglie vinte. Sinonimo di essere requisiti che tutti gli atleti di questa categoria possiedono.Per cui il modello non risulta essere significativo.
+
+```{r warning=FALSE,fig.cap="Figura 14"}
+cor<-cor(gymtable[,c(3:6)])
+res1 <- cor.mtest(gymtable[,c(3:6)], conf.level = .95)
+corrplot.mixed(cor,p.mat = res1$p, order = "hclust", insig = "pch",number.cex =1.2,upper = "ellipse")
+```
+
+```{r warning=FALSE}
+#seleziono il modello
+by_sport$modelli[[3]]
+```
+
+
+Notiamo che ognuna di queste tre categorie ha comunque peso e altezza specifici e differenziati.
+
+### Giocare in casa favorisce la vincita della nazione?
+
+Ho estrapolato dai dati le nazioni la cui capitale ha ospitato Olimpiadi estive.
+
+Nel seguente grafico i pallini colorati stanno ad indicare il numero di medaglie vinte da ciascuna nazione quando giocava in casa e le linee la storia (in termini di medaglie vinte) negli anni in cui non era sede olimpica. 
+La storia olimpica di ogni nazione è indicata da linee tratteggiate di diverso colore.
+
+```{r fig.width=10}
+stato_capitale<-read_csv("countries and continents.csv",col_types =cols(
+  .default = col_character(),
+  M49 = col_integer(),
+  GAUL = col_number(),
+  `ISO4217-currency_minor_unit` = col_integer(),
+  `ISO4217-currency_numeric_code` = col_integer(),
+  `Geoname ID` = col_integer()
+) )%>%select(name,Capital)%>%filter(!is.na(name))
+noc_nazioni_capitali<-noc_regions%>%left_join(stato_capitale,by=c("region"="name"))%>%select(NOC,region,Capital)%>%filter(!is.na(Capital))
+
+atleti_eventi2<-atleti_eventi%>%left_join(noc_nazioni_capitali,by="NOC")
+
+atleti_eventi3<-atleti_eventi2%>%filter(Capital==City,Season=="Summer")
+nazioni_ospitanti<-atleti_eventi3%>%select(Year,region,NOC)%>%distinct() #otteniamo le nazioni che hanno ospitato olimpiadi nella capitale e il relativo anno
+
+medaglie_anni<-atleti_eventi2%>%filter(NOC %in% nazioni_ospitanti$NOC, Season=="Summer")%>%group_by(Year,region)%>%summarize(medaglie=sum(medaglie))
+
+medaglie_casa<-atleti_eventi3%>%group_by(Year,region)%>%summarize(medaglie_casa=sum(medaglie))
+
+medaglie_anni<-medaglie_anni%>%anti_join(medaglie_casa,by="Year") #medaglie negli anni in cui non hanno giocato in casa
+
+
+g8<-ggplot(medaglie_anni,aes(x=as.factor(Year)))+geom_point(aes(y=medaglie,group=region),colour="grey",show.legend = F)+geom_line(aes(y=medaglie,group=region,colour=region),linetype="dotdash",show.legend = FALSE)+geom_point(data=medaglie_casa,aes(x=as.factor(Year),y=medaglie_casa,colour=region),show.legend = F)+theme_bw()+theme(axis.text.x=element_text(angle = 70,hjust = 1),legend.box.background = element_rect(),axis.title.x.bottom =element_text(lineheight = 12),panel.border = element_blank())+xlab("Year")+ggtitle("Nazioni e vittorie a confronto")
+ggplotly(g8,tooltip = c("region","medaglie","medaglie_casa"))
+```
+
+Osserviamo che i pallini sono tutti sopra le linee quindi giocare in casa favorisce la nazione.
+
+
+###Curiosità
+
+#### L'atleta più giovane di tutti i tempi
+
+```{r}
+kable(atleti_eventi%>%select(Name,Age,Year,NOC,Sport,Event,Medal)%>%distinct()%>%arrange(Age)%>%slice(1))
+
+```
+
+#### L'atleta più anziano di tutti i tempi
+
+```{r}
+kable(atleti_eventi%>%select(ID,Name,Age,Year,NOC,Sport,Event,Medal)%>%distinct()%>%arrange(-Age)%>%slice(1)%>%select(-ID))
+```
+
+Emerge che per alcuni anni si sono tenute competizoni artistiche che coinvolgevano esponenti della letteratura,pittura,musica,scultura ecc...  
+Approfondiremo nel prossimo punto!  
+Mentre l'atleta più anziano è: 
+
+```{r}
+kable(atleti_eventi%>%select(ID,Name,Age,Year,NOC,Sport,Event,Medal)%>%distinct()%>%arrange(-Age)%>%filter(Sport!="Art Competitions")%>%slice(1)%>%select(-ID))
+```
+
+
+#### Competizioni artistiche 
+
+```{r}
+kable(head(atleti_eventi%>%filter(Sport=="Art Competitions")%>%arrange(Year)%>%select(Event)%>%distinct()))
+```
+
+Le città che hanno ospitato tali competizioni sono state le seguenti:
+
+```{r}
+kable(atleti_eventi%>%filter(Sport=="Art Competitions")%>%arrange(Year)%>%select(Year,City)%>%distinct())
+```
+
+Gli italiani che hanno vinto competizioni artistiche:
+
+```{r}
+kable(atleti_eventi%>%filter(Sport=="Art Competitions" ,NOC=="ITA", Medal=="Gold")%>%select(Name,Sex,Age,Team,Year,Season,City,Event,Medal))
+```
+
+### Olimpiadi 2016 l'atleta più medagliato
+
+```{r include=FALSE}
+atleti_eventi%>%filter(Year==2016)%>%group_by(Sport,ID)%>%summarize(medaglie=sum(medaglie))%>%arrange(-medaglie)
+```
+
+```{r}
+kable(atleti_eventi%>%filter(ID==94406,Year==2016)%>%select(Name,Sex,Age,Height,Weight,Team,City,Sport,Event,Medal))
+
+```
+
+#Risultati
+
+* Gli eventi geopolitici influenzano la partecipazione ai Giochi Olimpici
+* Il numero dei partecipanti segue un trend crescente,con una partecipazione maggiore per le Olimpiadi rispetto ai giochi olimpici invernali dovuta alla differenza numerica di sport praticati.Inoltre le donne seguono un trend crescente ma non superano mai gli uomini.
+* Il numero di atleti presentati da ciascun comitato olimpico influenza esponenzialmente il numero di medaglie che si possono vincere.
+* Graficamente nazioni con PIL più alto si classificano meglio.Alcune eccezioni sono dovute a fattori non spiegati dai dati.
+* Le caratteristiche fisiche (peso-altezza) non sono fattori che spiegano la variabilità del numero di medaglie vinte e sono caratteristici di ogni sport.
+* Gli USA sono lo stato più forte con il nuoto come sport caratterizzante,seguiti dalla Germania caratterizzata dal Football e un terzo posto variabile.
+* Per le nazioni che hanno ospitato i giochi nella loro capitale questo si è rivelato un vantaggio.
+
+
+# Riferimenti storici
+
+<https://it.wikipedia.org/wiki/Giochi_olimpici_intermedi>  
+<https://it.wikipedia.org/wiki/Giochi_della_XVI_Olimpiade>  
+<https://it.wikipedia.org/wiki/Giochi_della_XXII_Olimpiade>  
+<https://it.wikipedia.org/wiki/Dimitrios_Loundras>  
